@@ -1,2 +1,49 @@
-# chat-equipe11
+# Chat Distribuído - Equipe 11
 
+Projeto da disciplina de Sistemas Distribuídos e Redes de Computadores.
+
+## 1. Nossa Stack e Justificativa
+
+Como a ideia do projeto é sair do modelo de sockets TCP puros e criar um chat que realmente escale horizontalmente, a gente decidiu usar a seguinte stack:
+
+* **FastAPI (Python):** Escolhemos o FastAPI porque ele já vem com suporte nativo e assíncrono para WebSockets (usando o Uvicorn). Isso resolve o problema de travar o servidor, já que ele aguenta várias conexões abertas ao mesmo tempo sem bloquear a thread principal. Além disso, aproveitamos o Pydantic para validar os payloads logo na entrada.
+* **Redis:** É o coração da nossa distribuição. Ele resolve dois problemas centrais que tínhamos na primeira versão do chat:
+  1. **Pub/Sub (Barramento de Mensagens):** Se um usuário conecta na Instância A e outro na Instância B, essas instâncias não se enxergam direto. Usamos um canal no Redis para o broadcast: a Instância A publica a mensagem lá, e todas as outras que estão inscritas recebem e repassam para seus clientes.
+  2. **Histórico centralizado:** As últimas 50 mensagens ficam salvas em uma lista na memória do próprio Redis. Assim, não importa em qual porta o usuário se conecte, ele sempre carrega o mesmo histórico.
+
+## 2. Desenho da Arquitetura
+
+Para simular um ambiente distribuído real, subimos duas instâncias independentes da nossa API (portas 8001 e 8002). Elas não trocam estado entre si diretamente, toda a sincronização é feita pelo Redis.
+
+```mermaid
+graph TD
+    subgraph Clientes
+        C1[Navegador - User 1]
+        C2[Navegador - User 2]
+        C3[Navegador - User 3]
+    end
+
+    subgraph Servidores Independentes
+        S1[Instância A - Porta 8001]
+        S2[Instância B - Porta 8002]
+    end
+
+    subgraph Broker e Estado
+        R[(Redis - :6379)]
+        CH[[Pub/Sub: chat:global]]
+        HIST[(Lista: chat:historico)]
+    end
+
+    C1 <-->|WebSocket| S1
+    C2 <-->|WebSocket| S1
+    C3 <-->|WebSocket| S2
+
+    S1 -->|Publica e Escuta| CH
+    S2 -->|Publica e Escuta| CH
+
+    S1 <-->|Salva e Lê (N=50)| HIST
+    S2 <-->|Salva e Lê (N=50)| HIST
+    
+    R --- CH
+    R --- HIST
+```
