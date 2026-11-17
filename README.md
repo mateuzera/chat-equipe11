@@ -47,3 +47,21 @@ graph TD
     R --- CH
     R --- HIST
 ```
+## 3. Protocolo de Comunicação (WebSocket)
+
+Como usamos WebSockets, a comunicação acontece por meio de eventos no formato JSON.
+
+**1. Entrando na Sala (Conexão)**
+O cliente conecta enviando o nome de usuário na própria URL (Query String):
+`ws://localhost:8001/ws?usuario=Mateus`
+
+**2. O que o Servidor envia para o Cliente**
+Assim que conecta, o servidor manda o histórico (últimas 50 mensagens). Depois, avisa quem entra, sai e as mensagens novas:
+* `{"evento": "historico", "dados": [...]}`
+* `{"evento": "usuario_entrou", "dados": {"usuario": "Mateus", ...}}`
+* `{"evento": "nova_mensagem", "dados": {"usuario": "Igor", "texto": "E aí!", ...}}`
+* `{"evento": "erro", "dados": {"mensagem": "Texto não pode ser vazio"}}`
+
+**3. O que o Cliente envia para o Servidor**
+O cliente só precisa mandar um evento para falar no chat:
+* `{"evento": "enviar_mensagem", "texto": "Boa noite, pessoal!"}`
