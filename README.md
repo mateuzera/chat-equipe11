@@ -65,3 +65,34 @@ Assim que conecta, o servidor manda o histórico (últimas 50 mensagens). Depois
 **3. O que o Cliente envia para o Servidor**
 O cliente só precisa mandar um evento para falar no chat:
 * `{"evento": "enviar_mensagem", "texto": "Boa noite, pessoal!"}`
+
+## 4. Como Rodar e Testar o Projeto (Passo a Passo)
+
+### Pré-requisitos
+* Python 3.9+ instalado.
+* **Redis** rodando localmente na porta `6379`. 
+  *(Se você usar Docker, basta rodar: `docker run -d -p 6379:6379 redis`)*
+
+### 1. Instalando as Dependências
+Abra o terminal na raiz do projeto, crie o ambiente virtual e instale as bibliotecas:
+```bash
+python -m venv venv
+venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+### 2. Iniciando as Instâncias (A e B)
+No Windows, basta dar um **duplo clique** no arquivo `iniciar_instancias.bat` que está na raiz do projeto. 
+Ele abrirá automaticamente dois terminais ativando o ambiente virtual:
+* Uma janela rodando a **Instância A** na porta `8001`
+* Outra janela rodando a **Instância B** na porta `8002`
+
+### 3. Testando a Comunicação (Pub/Sub do Redis)
+Com as duas instâncias rodando nas janelas pretas, abra um novo terminal no VS Code (certifique-se de que o `venv` está ativado) e rode o nosso script de teste:
+
+```bash
+python test_client.py
+```
+
+**O que esse script faz?**
+Ele conecta o "UserDaInstanciaA" na porta 8001 e o "UserDaInstanciaB" na porta 8002. O usuário A envia uma mensagem e o script escuta a porta 8002 para ver se a mensagem chega lá. Se o Redis estiver funcionando, você verá a mensagem recebida com sucesso no terminal!
