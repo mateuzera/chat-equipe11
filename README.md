@@ -18,35 +18,30 @@ Para simular um ambiente distribuído real, subimos duas instâncias independent
 ```mermaid
 graph TD
     subgraph Clientes
-        C1[Navegador - User 1]
-        C2[Navegador - User 2]
-        C3[Navegador - User 3]
+        C1["Navegador - User 1"]
+        C2["Navegador - User 2"]
     end
 
-    subgraph Servidores Independentes
-        S1[Instância A - Porta 8001]
-        S2[Instância B - Porta 8002]
+    subgraph "Servidores FastAPI (Stateless)"
+        S1["Instância A - Porta 8001"]
+        S2["Instância B - Porta 8002"]
     end
 
-    subgraph Broker e Estado
-        R[(Redis - :6379)]
-        CH[[Pub/Sub: chat:global]]
-        HIST[(Lista: chat:historico)]
+    subgraph "Broker & Estado Central (Redis)"
+        PUBSUB(("Canal Pub/Sub: chat:global"))
+        HIST[("Lista Redis: chat:historico")]
     end
 
     C1 <-->|WebSocket| S1
-    C2 <-->|WebSocket| S1
-    C3 <-->|WebSocket| S2
+    C2 <-->|WebSocket| S2
 
-    S1 -->|Publica e Escuta| CH
-    S2 -->|Publica e Escuta| CH
+    S1 <-->|"Publica e Escuta"| PUBSUB
+    S2 <-->|"Publica e Escuta"| PUBSUB
 
-    S1 <-->|Salva e Lê (N=50)| HIST
-    S2 <-->|Salva e Lê (N=50)| HIST
-    
-    R --- CH
-    R --- HIST
+    S1 <-->|"Salva e Lê (N=50)"| HIST
+    S2 <-->|"Salva e Lê (N=50)"| HIST
 ```
+
 ## 3. Protocolo de Comunicação (WebSocket)
 
 Como usamos WebSockets, a comunicação acontece por meio de eventos no formato JSON.
