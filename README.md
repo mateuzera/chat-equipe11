@@ -4,12 +4,10 @@ Projeto da disciplina de Sistemas Distribuídos e Redes de Computadores.
 
 ## 👥 Equipe 11
 
-| Integrante | 
-| :--- | :--- |
-| **Igor Soares** | 
-| **Izadora Taline Gonçalves Andrade** |
-| **Mateus Barbosa de Oliveira Santos** | 
-| **Mateus Martins Burgos** | 
+* **Igor Soares**
+* **Izadora Taline Gonçalves Andrade**
+* **Mateus Barbosa de Oliveira Santos**
+* **Mateus Martins Burgos**
 
 ## 1. Nossa Stack e Justificativa
 
