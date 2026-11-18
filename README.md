@@ -2,6 +2,15 @@
 
 Projeto da disciplina de Sistemas Distribuídos e Redes de Computadores.
 
+## 👥 Equipe 11
+
+| Integrante | 
+| :--- | :--- |
+| **Igor Soares** | 
+| **Izadora Taline Gonçalves Andrade** |
+| **Mateus Barbosa de Oliveira Santos** | 
+| **Mateus Martins Burgos** | 
+
 ## 1. Nossa Stack e Justificativa
 
 Como a ideia do projeto é sair do modelo de sockets TCP puros e criar um chat que realmente escale horizontalmente, a gente decidiu usar a seguinte stack:
