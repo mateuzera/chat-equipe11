@@ -1,8 +1,10 @@
 import asyncio
 import json
+import logging
 import os
 from contextlib import asynccontextmanager
-from typing import List
+from datetime import datetime, timezone
+from typing import Dict, List
 
 import redis.asyncio as redis
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
@@ -10,115 +12,214 @@ from pydantic import ValidationError
 
 from app.schemas import ChatMessage, ClientPayload, ServerEvent, USERNAME_REGEX
 
-# configurações do Redis e da Instância
 REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
 PUBSUB_CHANNEL = "chat:global"
 HISTORY_KEY = "chat:historico"
-MAX_HISTORY_SIZE = 50  # O valor de N (últimas 50 mensagens) pedido pelo professor
-INSTANCE_ID = os.getenv("INSTANCE_ID", "Instancia-Indefinida")
+MAX_HISTORY_SIZE = 50
+INSTANCE_ID = os.getenv("INSTANCE_ID", "Instancia-A")
+
+# Configuração de logs estruturados no console
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("chat_distribuido")
+
+
+def log_evento(evento: str, **detalhes):
+    """Imprime logs operacionais estruturados no formato chave=valor."""
+    campos = " | ".join(f"{k}={v}" for k, v in detalhes.items())
+    logger.info(f"instancia={INSTANCE_ID} | evento={evento}" + (f" | {campos}" if campos else ""))
+
 
 class ConnectionManager:
     def __init__(self):
-        self.active_connections: List[WebSocket] = []
+        # Mapeia cada socket ativo na memória desta instância ao nome do usuário
+        self.active_connections: Dict[WebSocket, str] = {}
 
-    async def connect(self, websocket: WebSocket):
+    async def connect(self, websocket: WebSocket, usuario: str):
         await websocket.accept()
-        self.active_connections.append(websocket)
+        self.active_connections[websocket] = usuario
 
     def disconnect(self, websocket: WebSocket):
-        if websocket in self.active_connections:
-            self.active_connections.remove(websocket)
+        self.active_connections.pop(websocket, None)
 
-    async def broadcast_local(self, message_json: str):
-        """Manda a mensagem para quem está conectado NESTA porta/instância"""
-        for connection in list(self.active_connections):
+    async def broadcast_local(self, message_json: str) -> int:
+        """Envia o evento para todos os clientes conectados NESTA instância."""
+        enviados = 0
+        for connection in list(self.active_connections.keys()):
             try:
                 await connection.send_text(message_json)
+                enviados += 1
             except Exception:
                 self.disconnect(connection)
+        return enviados
+
 
 manager = ConnectionManager()
 redis_client: redis.Redis = None
 
+
 async def redis_listener():
-    """Fica escutando o Redis. Se chegar mensagem de outra instância, repassa pros clientes locais"""
+    """Escuta continuamente o canal Pub/Sub do Redis e repassa aos clientes locais."""
     pubsub = redis_client.pubsub()
     await pubsub.subscribe(PUBSUB_CHANNEL)
-    print(f"[{INSTANCE_ID}] Escutando o canal Pub/Sub: {PUBSUB_CHANNEL}")
-    
+    log_evento("PUBSUB_INSCRITO", canal=PUBSUB_CHANNEL)
+
     async for message in pubsub.listen():
         if message["type"] == "message":
-            await manager.broadcast_local(message["data"])
+            data_str = message["data"]
+            try:
+                tipo_evento = json.loads(data_str).get("evento", "desconhecido")
+            except json.JSONDecodeError:
+                tipo_evento = "invalido"
+
+            entregues = await manager.broadcast_local(data_str)
+            log_evento(
+                "PUBSUB_RECEBIDO_E_BROADCAST",
+                canal=PUBSUB_CHANNEL,
+                tipo=tipo_evento,
+                clientes_locais_notificados=entregues,
+            )
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # liga no Redis quando a API sobe
     global redis_client
     redis_client = redis.from_url(REDIS_URL, decode_responses=True)
     await redis_client.ping()
-    print(f"[{INSTANCE_ID}] Conectado ao Redis!")
-    
-    # inicia a tarefa que fica escutando as mensagens em background
-    task = asyncio.create_task(redis_listener())
+    log_evento("SERVIDOR_INICIADO", redis_url=REDIS_URL, historico_n=MAX_HISTORY_SIZE)
+
+    listener_task = asyncio.create_task(redis_listener())
     yield
-    # desliga tudo bonitinho quando a API cai
-    task.cancel()
-    await redis_client.close()
+
+    listener_task.cancel()
+    await redis_client.aclose()
+    log_evento("SERVIDOR_ENCERRADO")
+
 
 app = FastAPI(title=f"Chat Distribuído - {INSTANCE_ID}", lifespan=lifespan)
 
+
 @app.get("/health")
 async def health_check():
-    """Rota de teste que o professor pediu no esqueleto base"""
-    return {"status": "ok", "instancia": INSTANCE_ID}
+    """Rota HTTP para verificar a saúde da instância e os clientes conectados nela."""
+    redis_ok = await redis_client.ping()
+    usuarios_locais = list(manager.active_connections.values())
+    log_evento("HEALTH_CHECK", redis_ok=redis_ok, clientes_locais=len(usuarios_locais))
+    return {
+        "status": "online",
+        "instancia": INSTANCE_ID,
+        "redis_conectado": redis_ok,
+        "clientes_conectados_localmente": len(usuarios_locais),
+        "usuarios_locais": usuarios_locais,
+    }
+
+
+async def salvar_no_historico(msg: ChatMessage):
+    """Salva a mensagem na lista do Redis e mantém apenas as últimas N mensagens."""
+    await redis_client.rpush(HISTORY_KEY, msg.model_dump_json())
+    await redis_client.ltrim(HISTORY_KEY, -MAX_HISTORY_SIZE, -1)
+
+
+async def obter_historico() -> List[dict]:
+    """Recupera as últimas N mensagens armazenadas no Redis."""
+    raw_messages = await redis_client.lrange(HISTORY_KEY, 0, -1)
+    return [json.loads(m) for m in raw_messages]
+
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket, usuario: str = Query(...)):
-    # valida o nome de usuário (rejeita se for inválido)
+async def websocket_endpoint(
+    websocket: WebSocket, usuario: str = Query(..., description="Nome de usuário")
+):
     usuario_limpo = usuario.strip()
+
+    # 1. Validação do nome de usuário
     if not USERNAME_REGEX.match(usuario_limpo):
         await websocket.accept()
-        erro = ServerEvent(evento="erro", dados={"mensagem": "Usuário inválido (use 3-20 letras/números)."})
+        log_evento("CONEXAO_REJEITADA", usuario_tentado=usuario_limpo, motivo="formato_invalido")
+        erro = ServerEvent(
+            evento="erro",
+            dados={"mensagem": "Usuário inválido. Use 3-20 caracteres (letras, números, _ ou -)."},
+        )
         await websocket.send_text(erro.model_dump_json())
         await websocket.close(code=1008)
         return
 
-    await manager.connect(websocket)
+    # 2. Aceita a conexão WebSocket
+    await manager.connect(websocket, usuario_limpo)
+    log_evento(
+        "USUARIO_ENTROU",
+        usuario=usuario_limpo,
+        clientes_locais=len(manager.active_connections),
+    )
 
-    # puxa o histórico do Redis e manda pro usuário que acabou de entrar
-    mensagens_salvas = await redis_client.lrange(HISTORY_KEY, 0, -1)
-    historico = [json.loads(m) for m in mensagens_salvas]
-    
+    # 3. Envia histórico das últimas N mensagens apenas para o novo cliente
+    historico = await obter_historico()
     evento_hist = ServerEvent(evento="historico", dados=historico)
     await websocket.send_text(evento_hist.model_dump_json())
+    log_evento("HISTORICO_ENVIADO", usuario=usuario_limpo, quantidade=len(historico))
 
-    # avisa no Redis que o usuário entrou
-    evento_entrou = ServerEvent(evento="usuario_entrou", dados={"usuario": usuario_limpo, "instancia": INSTANCE_ID})
+    # 4. Publica entrada do usuário no canal Pub/Sub para todas as instâncias
+    evento_entrou = ServerEvent(
+        evento="usuario_entrou",
+        dados={
+            "usuario": usuario_limpo,
+            "instancia": INSTANCE_ID,
+            "timestamp_iso": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     await redis_client.publish(PUBSUB_CHANNEL, evento_entrou.model_dump_json())
 
+    # 5. Loop principal de recebimento de mensagens do cliente
     try:
         while True:
-            # fica esperando o usuário digitar algo
             raw_text = await websocket.receive_text()
             try:
-                # valida o que o usuário mandou usando nossos Schemas
-                payload = ClientPayload(**json.loads(raw_text))
-                nova_msg = ChatMessage(usuario=usuario_limpo, texto=payload.texto, instancia_origem=INSTANCE_ID)
+                payload_dict = json.loads(raw_text)
+                payload = ClientPayload(**payload_dict)
 
-                # salva no Redis (RPUSH) e corta pra manter só as últimas 50 (LTRIM)
-                await redis_client.rpush(HISTORY_KEY, nova_msg.model_dump_json())
-                await redis_client.ltrim(HISTORY_KEY, -MAX_HISTORY_SIZE, -1)
-                
-                # publica no Pub/Sub pro Brasil todo ver (Instância A e B)
-                evento_msg = ServerEvent(evento="nova_mensagem", dados=nova_msg.model_dump())
+                nova_msg = ChatMessage(
+                    usuario=usuario_limpo,
+                    texto=payload.texto,
+                    instancia_origem=INSTANCE_ID,
+                )
+
+                await salvar_no_historico(nova_msg)
+                evento_msg = ServerEvent(
+                    evento="nova_mensagem", dados=nova_msg.model_dump()
+                )
                 await redis_client.publish(PUBSUB_CHANNEL, evento_msg.model_dump_json())
 
+                log_evento(
+                    "MENSAGEM_PUBLICADA",
+                    usuario=usuario_limpo,
+                    tamanho_texto=len(nova_msg.texto),
+                    canal=PUBSUB_CHANNEL,
+                )
+
             except (json.JSONDecodeError, ValidationError) as e:
-                erro = ServerEvent(evento="erro", dados={"mensagem": "Mensagem inválida."})
-                await websocket.send_text(erro.model_dump_json())
+                log_evento("ERRO_VALIDACAO", usuario=usuario_limpo, motivo="payload_invalido")
+                erro_validacao = ServerEvent(
+                    evento="erro",
+                    dados={"mensagem": "Mensagem inválida ou fora do limite (1 a 500 caracteres)."},
+                )
+                await websocket.send_text(erro_validacao.model_dump_json())
 
     except WebSocketDisconnect:
-        # avisa no Redis quando o usuário fechar a aba
         manager.disconnect(websocket)
-        evento_saiu = ServerEvent(evento="usuario_saiu", dados={"usuario": usuario_limpo, "instancia": INSTANCE_ID})
+        log_evento(
+            "USUARIO_SAIU",
+            usuario=usuario_limpo,
+            clientes_locais=len(manager.active_connections),
+        )
+        evento_saiu = ServerEvent(
+            evento="usuario_saiu",
+            dados={
+                "usuario": usuario_limpo,
+                "instancia": INSTANCE_ID,
+                "timestamp_iso": datetime.now(timezone.utc).isoformat(),
+            },
+        )
         await redis_client.publish(PUBSUB_CHANNEL, evento_saiu.model_dump_json())
