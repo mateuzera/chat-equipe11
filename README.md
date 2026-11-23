@@ -71,30 +71,62 @@ O cliente só precisa mandar um evento para falar no chat:
 ## 4. Como Rodar e Testar o Projeto (Passo a Passo)
 
 ### Pré-requisitos
-* Python 3.9+ instalado.
-* **Redis** rodando localmente na porta `6379`. 
-  *(Se você usar Docker, basta rodar: `docker run -d -p 6379:6379 redis`)*
+- Python 3.9+ instalado.
+- **Redis** baixado/instalado no Windows (ou via Docker: `docker run -d -p 6379:6379 redis`).
 
-### 1. Instalando as Dependências
+### 1. Instalando as Dependências (Apenas na primeira vez)
 Abra o terminal na raiz do projeto, crie o ambiente virtual e instale as bibliotecas:
 ```bash
 python -m venv venv
 venv\Scripts\activate
 pip install -r requirements.txt
 ```
+*(Nota: Se o PowerShell bloquear o `activate`, rode antes: `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`)*
 
-### 2. Iniciando as Instâncias (A e B)
+### 2. Ligando o Broker Redis (Obrigatório fazer primeiro)
+- Vá até a pasta onde você extraiu o Redis no Windows.
+- Dê um duplo clique no arquivo `redis-server.exe`.
+- Confirme que a janela mostrou `Ready to accept connections` na porta 6379 e **deixe-a minimizada** (não feche).
+
+### 3. Iniciando as Instâncias (A e B)
 No Windows, basta dar um **duplo clique** no arquivo `iniciar_instancias.bat` que está na raiz do projeto. 
 Ele abrirá automaticamente dois terminais ativando o ambiente virtual:
-* Uma janela rodando a **Instância A** na porta `8001`
-* Outra janela rodando a **Instância B** na porta `8002`
+- Uma janela rodando a **Instância A** na porta `8001`
+- Outra janela rodando a **Instância B** na porta `8002`
 
-### 3. Testando a Comunicação (Pub/Sub do Redis)
-Com as duas instâncias rodando nas janelas pretas, abra um novo terminal no VS Code (certifique-se de que o `venv` está ativado) e rode o nosso script de teste:
+*(Verifique se ambas imprimiram `SERVIDOR_INICIADO` e `PUBSUB_INSCRITO` sem erros, e deixe as duas janelas abertas).*
 
+### 4. Verificando a Saúde dos Servidores (Health Check)
+Para confirmar se as APIs estão conectadas ao Redis, acesse no navegador ou use o terminal:
+```bash
+curl http://localhost:8001/health
+curl http://localhost:8002/health
+```
+*A resposta esperada é: `{"status": "online", "redis_conectado": true}`.*
+
+### 5. Testando o Chat na Prática (Clientes de Terminal)
+Abra dois terminais lado a lado no VS Code (com o `venv` ativado) para simular usuários reais:
+
+**Terminal 1 (Instância A):**
+```bash
+python client_cli.py 8001 Mateus
+```
+**Terminal 2 (Instância B):**
+```bash
+python client_cli.py 8002 Igor
+```
+- **Comunicação:** Digite uma mensagem em um terminal e dê Enter; ela aparecerá instantaneamente no outro.
+- **Histórico Automático:** Abra um Terminal 3, rode `python client_cli.py 8002 Izadora` e veja as mensagens anteriores carregando na entrada.
+
+### 6. Teste Automatizado (Pub/Sub do Redis)
+Com as duas instâncias rodando nas janelas pretas, em um terminal extra no VS Code, rode o nosso script de teste:
 ```bash
 python test_client.py
 ```
-
 **O que esse script faz?**
-Ele conecta o "UserDaInstanciaA" na porta 8001 e o "UserDaInstanciaB" na porta 8002. O usuário A envia uma mensagem e o script escuta a porta 8002 para ver se a mensagem chega lá. Se o Redis estiver funcionando, você verá a mensagem recebida com sucesso no terminal!
+Ele conecta o "UserDaInstanciaA" na porta 8001 e o "UserDaInstanciaB" na porta 8002. O usuário A envia uma mensagem e o script escuta a porta 8002 para ver se a mensagem chega lá via Redis. Você verá a mensagem de `[SUCESSO!]` no final.
+
+### 7. Como Desligar Tudo no Final
+1. Digite `/sair` nos terminais dos clientes (Passo 5).
+2. Feche as duas janelas pretas das Instâncias (8001 e 8002).
+3. Por último, feche a janela preta do `redis-server.exe`.
